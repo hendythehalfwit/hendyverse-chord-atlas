@@ -1,244 +1,53 @@
-<script>
-"use strict";
-window.addEventListener("load", function () {
-  // grab elements (fail fast if any are missing)
-  const stage = document.getElementById("stage");
-  const moodSel = document.getElementById("mood");
-  const keySel = document.getElementById("key");
-  const searchInput = document.getElementById("search");
-  const soundToggle = document.getElementById("sound");
-  const voiceSel = document.getElementById("voice");
-  const iivii = document.getElementById("iivii");
-  const bootEl = document.getElementById("boot");
-
-  if (!stage || !moodSel || !keySel || !searchInput || !iivii) {
-    console.error("hendy atlas: missing required DOM nodes.");
-    if (bootEl) bootEl.textContent = "boot failed — missing DOM nodes";
-    return;
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>hendyverse chord atlas — sector 19.84</title>
+<meta name="theme-color" content="#0b0f14"/>
+<style>
+  :root{
+    --bg:#0b0f14;--fg:#eef2f7;
+    --glass1:rgba(16,67,94,0.35);
+    --glass2:rgba(8,62,41,0.28);
+    --glass3:rgba(112,63,20,0.35);
+    --border:rgba(255,255,255,0.1);
+    --gold:#ffd782;
   }
-
-  const ROOTS = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-  const ZONES = [
-    { id:"frozen",   color:"#63e0ff" },
-    { id:"dream",    color:"#a591ff" },
-    { id:"drift",    color:"#6fffd0" },
-    { id:"fire",     color:"#ffd166" },
-    { id:"resolve",  color:"#ff9b5e" },
-    { id:"collapse", color:"#ff6b6b" }
-  ];
-  const CHORD_TYPES = {
-    frozen:  [{s:"m"},{s:"m7"},{s:"m(add9)"},{s:"dim"},{s:"m7b5"}],
-    dream:   [{s:"maj7"},{s:"maj9"},{s:"maj7#11"},{s:"6/9"},{s:"m11"}],
-    drift:   [{s:"6"},{s:"add9"},{s:"sus2"},{s:"sus4"},{s:"m7"}],
-    fire:    [{s:"7"},{s:"9"},{s:"13"},{s:"7b9"},{s:"7#9"},{s:"+"},{s:"7sus4"}],
-    resolve: [{s:""},{s:"maj7"},{s:"6"},{s:"add9"}],
-    collapse:[{s:"7alt"},{s:"dim7"},{s:"7b13"},{s:"7#11"},{s:"7b9"}]
-  };
-  const ZONE_EDGES = {
-    frozen:["dream","collapse"], dream:["drift","fire"], drift:["fire","resolve"],
-    fire:["resolve","collapse"], resolve:["drift","dream"], collapse:["resolve","frozen"]
-  };
-
-  // layout
-  const WIDTH = 1600, HEIGHT = 520, ZW = WIDTH / ZONES.length;
-
-  // helpers
-  function majorScale(tonic){
-    const idx = ROOTS.indexOf(tonic);
-    const steps = [0,2,4,5,7,9,11].map(s => (idx + s) % 12);
-    return steps.map(i => ROOTS[i]);
-  }
-  function rng(seed){
-    let h = 0; for (let i=0;i<seed.length;i++) h = ((h*31) + seed.charCodeAt(i)) >>> 0;
-    return () => (h = (h*1664525 + 1013904223) >>> 0, (h % 1000)/1000);
-  }
-
-  // ---- Web Audio (safe lazy init) ----
-  let AC = null, master = null;
-  function ensureAC(){
-    if (!soundToggle) return; // sound control optional
-    if (!AC) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return; // old browser
-      AC = new Ctx();
-      master = AC.createGain();
-      master.gain.value = 0.12;
-      master.connect(AC.destination);
-    }
-    if (AC.state === "suspended") AC.resume();
-  }
-  const NOTE_INDEX = {"C":0,"C#":1,"D":2,"D#":3,"E":4,"F":5,"F#":6,"G":7,"G#":8,"A":9,"A#":10,"B":11};
-  function freqFor(note, oct){ const n = NOTE_INDEX[note]; const midi = 12*(oct+1)+n; return 440*Math.pow(2,(midi-69)/12); }
-  function parseLabel(label){ const m = label.match(/^([A-G]#?)(.*)$/); return m ? {root:m[1], qual:m[2]||""} : null; }
-  const FORMULAS = {
-    "":[0,4,7], "m":[0,3,7], "6":[0,4,7,9], "maj7":[0,4,7,11], "maj9":[0,4,7,11,14],
-    "6/9":[0,4,7,9,14], "maj7#11":[0,4,6,7,11], "m7":[0,3,7,10], "m(add9)":[0,3,7,14],
-    "m11":[0,3,7,10,14,17], "7":[0,4,7,10], "9":[0,4,7,10,14], "13":[0,4,7,10,14,17,21],
-    "7b9":[0,4,7,10,13], "7#9":[0,4,7,10,15], "+":[0,4,8], "7sus4":[0,5,7,10],
-    "add9":[0,4,7,14], "sus2":[0,2,7], "sus4":[0,5,7], "dim":[0,3,6], "dim7":[0,3,6,9],
-    "m7b5":[0,3,6,10], "7b13":[0,4,7,10,20], "7#11":[0,4,7,10,18], "7alt":[0,4,7,10,13,15,18,20]
-  };
-  function voiceChord(root, qual){
-    const baseOct = 3;
-    const steps = (FORMULAS[qual] || FORMULAS[""]).slice().sort((a,b)=>a-b);
-    return steps.map((s,i)=>{ const oct = baseOct + Math.floor(i/3); return freqFor(root, oct) * Math.pow(2, s/12); });
-  }
-  function playChord(label){
-    if (!soundToggle || !soundToggle.checked) return;
-    ensureAC();
-    if (!AC) return;
-    const p = parseLabel(label); if (!p) return;
-    const freqs = voiceChord(p.root, p.qual);
-    const now = AC.currentTime, dur = 1.8;
-    freqs.forEach((f,i)=>{
-      const osc = AC.createOscillator();
-      const g = AC.createGain();
-      osc.type = (voiceSel && voiceSel.value) || "triangle";
-      osc.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, now);
-      const t = now + i*0.025;
-      g.gain.linearRampToValueAtTime(0.18, t+0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(g).connect(master);
-      osc.start(t); osc.stop(t + dur + 0.1);
-    });
-  }
-
-  // ---- draw bands ----
-  ZONES.forEach((z,i)=>{
-    const r = document.createElementNS("http://www.w3.org/2000/svg","rect");
-    r.setAttribute("x", (WIDTH/ZONES.length)*i);
-    r.setAttribute("y", 0);
-    r.setAttribute("width", WIDTH/ZONES.length);
-    r.setAttribute("height", HEIGHT);
-    r.setAttribute("fill", `url(#band-${z.id})`);
-    stage.appendChild(r);
-
-    const l = document.createElementNS("http://www.w3.org/2000/svg","text");
-    l.setAttribute("x", (WIDTH/ZONES.length)*(i+0.5));
-    l.setAttribute("y", 24);
-    l.setAttribute("text-anchor", "middle");
-    l.setAttribute("fill", "rgba(255,255,255,0.7)");
-    l.style.letterSpacing = "0.2em";
-    l.style.fontSize = "12px";
-    l.textContent = z.id;
-    stage.appendChild(l);
-  });
-
-  // ---- nodes & edges ----
-  const nodes = [], edges = [];
-  ZONES.forEach((zone, zi)=>{
-    const j = rng(zone.id);
-    const x0 = zi*ZW + ZW*0.1;
-    const x1 = (zi+1)*ZW - ZW*0.1;
-    const yTop = 70, yBot = HEIGHT - 60;
-    const types = CHORD_TYPES[zone.id] || [];
-    ROOTS.forEach((root, ri)=>{
-      types.forEach((t, ti)=>{
-        const sym = t.s;
-        const label = (zone.id === "resolve" && sym === "") ? root : (root + sym);
-        const id = label + "-" + zone.id;
-        const x = x0 + (x1-x0) * (0.15 + 0.7 * j(id));
-        const y = yTop + (yBot-yTop) * ((ri + (ti+1)/(types.length+1)) / (ROOTS.length+1));
-        nodes.push({ id, label, zone: zone.id, root, x, y });
-      });
-    });
-  });
-
-  nodes.forEach(n=>{
-    (ZONE_EDGES[n.zone]||[]).forEach(z=>{
-      const sameRoot = nodes.filter(m => m.zone===z && m.root===n.root);
-      const target = sameRoot[0] || nodes.find(m => m.zone===z);
-      if (target) edges.push({ from:n.id, to:target.id });
-    });
-  });
-
-  const edgeEls = edges.map(e=>{
-    const a = nodes.find(n => n.id===e.from);
-    const b = nodes.find(n => n.id===e.to);
-    const p = document.createElementNS("http://www.w3.org/2000/svg","path");
-    p.setAttribute("d", `M ${a.x} ${a.y} C ${(a.x+b.x)/2} ${a.y-40}, ${(a.x+b.x)/2} ${b.y+40}, ${b.x} ${b.y}`);
-    p.setAttribute("fill","none");
-    p.setAttribute("stroke","rgba(255,215,130,0.25)");
-    p.setAttribute("stroke-width","1.1");
-    stage.appendChild(p);
-    return { el:p, a, b };
-  });
-
-  const nodeEls = nodes.map(n=>{
-    const g = document.createElementNS("http://www.w3.org/2000/svg","g");
-    const glow = document.createElementNS("http://www.w3.org/2000/svg","circle");
-    glow.setAttribute("cx", n.x); glow.setAttribute("cy", n.y);
-    glow.setAttribute("r", 0); glow.setAttribute("fill", "url(#glow)"); glow.setAttribute("opacity","0");
-    const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
-    c.setAttribute("cx", n.x); c.setAttribute("cy", n.y); c.setAttribute("r", 10);
-    c.setAttribute("fill", "#0b0f14");
-    c.setAttribute("stroke", ZONES.find(z=>z.id===n.zone).color);
-    c.setAttribute("stroke-width", 2);
-    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
-    t.setAttribute("x", n.x); t.setAttribute("y", n.y-16);
-    t.setAttribute("text-anchor", "middle");
-    t.setAttribute("fill", "rgba(255,255,255,0.9)");
-    t.style.fontSize = "10px";
-    t.textContent = n.label;
-
-    g.style.cursor = "pointer";
-    g.addEventListener("click", () => playChord(n.label));
-    g.addEventListener("mouseenter", () => setHover(n.id));
-    g.addEventListener("mouseleave", () => setHover(null));
-
-    g.appendChild(glow); g.appendChild(c); g.appendChild(t);
-    stage.appendChild(g);
-    return { g, glow, c, t, data:n };
-  });
-
-  function setHover(id){
-    nodeEls.forEach(ne=>{
-      const on = ne.data.id === id;
-      ne.glow.setAttribute("r", on ? 24 : 0);
-      ne.glow.setAttribute("opacity", on ? 0.25 : 0);
-      ne.c.setAttribute("stroke-width", on ? 3 : 2);
-    });
-    edgeEls.forEach(e=>{
-      const on = (e.a.id===id || e.b.id===id);
-      e.el.setAttribute("stroke", `rgba(255,215,130,${on?0.9:0.25})`);
-      e.el.setAttribute("stroke-width", on ? 2.2 : 1.1);
-    });
-  }
-
-  function applyFilters(){
-    const mood = moodSel.value;
-    const q = (searchInput.value || "").toLowerCase().trim();
-    nodeEls.forEach(ne=>{
-      const moodOn = ne.data.zone === mood;
-      const searchOn = q ? ne.data.label.toLowerCase().includes(q) : true;
-      ne.g.style.opacity = (moodOn || searchOn) ? 1 : 0.2;
-    });
-  }
-
-  function updateII(){
-    const k = keySel.value;
-    const s = majorScale(k);
-    const ii = s[1] + "m7", V = s[4] + "7", I = s[0] + "maj7";
-    iivii.textContent = `ii–V–I in ${k}: ${ii} → ${V} → ${I}`;
-  }
-
-  moodSel.addEventListener("change", applyFilters);
-  searchInput.addEventListener("input", applyFilters);
-  keySel.addEventListener("change", updateII);
-
-  applyFilters();
-  updateII();
-
-  // footer modal
-  const m = document.getElementById("modal");
-  const a = document.getElementById("about");
-  const c = document.getElementById("close");
-  if (a && m) a.addEventListener("click", e => { e.preventDefault(); m.style.display = "flex"; });
-  if (c && m) c.addEventListener("click", () => m.style.display = "none");
-  if (m) m.addEventListener("click", e => { if (e.target === m) m.style.display = "none"; });
-
-  if (bootEl) bootEl.style.display = "none";
-  console.log("hendy atlas: boot ok");
-});
-</script>
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .title{font-weight:700;font-size:20px;letter-spacing:.02em}
+  select,input{background:rgba(255,255,255,.06);border:1px solid var(--border);
+    color:var(--fg);border-radius:10px;padding:8px 10px;font-size:14px;outline:none}
+  input{width:220px}
+  .panel{border:1px solid var(--border);border-radius:16px;padding:14px;
+    background:linear-gradient(90deg,var(--glass1),var(--glass2),var(--glass3));
+    box-shadow:0 12px 30px rgba(0,0,0,.35),inset 0 0 60px rgba(255,255,255,.05)}
+  .foot{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#9fb0c2;margin-top:8px;align-items:center;justify-content:space-between}
+  .legend{display:flex;gap:8px;align-items:center}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,.05)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row">
+    <div class="title">the <span style="text-transform:lowercase">hendy</span>verse chord atlas — <span style="color:#facc6b">interactive</span></div>
+    <div class="row" style="gap:8px">
+      <label><select id="mood">
+        <option value="frozen">frozen</option><option value="dream">dream</option>
+        <option value="drift" selected>drift</option><option value="fire">fire</option>
+        <option value="resolve">resolve</option><option value="collapse">collapse</option>
+      </select></label>
+      <label><select id="key">
+        <option>C</option><option>C#</option><option>D</option><option>D#</option><option>E</option><option>F</option>
+        <option>F#</option><option>G</option><option>G#</option><option>A</option><option>A#</option><option>B</option>
+      </select></label>
+      <input id="search" placeholder="find chord (e.g., Aadd9)"/>
+      <label class="pill"><input id="sound" type="checkbox" checked> sound</label>
+      <label class="pill">voice
+        <select id="voice"><option>sine</option><option selected>triangle</option><option>square</option></select>
+      </lab
